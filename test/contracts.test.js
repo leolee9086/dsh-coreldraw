@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import { runtimeTarget } from '../src/bridge.js';
 import { validate } from '../src/index.js';
 const doc = { document_id: 'a'.repeat(32), expected_revision: 0, snapshot_token: 'b'.repeat(64) };
+test('export range options are validated before COM', () => {
+  const base = { document_id: doc.document_id, path: 'D:\\out\\area.png', format: 'png' };
+  assert.throws(() => validate('export', { ...base, area: { x: 0, y: 0, width: 0, height: 10 } }), /area.width/);
+  assert.throws(() => validate('export', { ...base, area: { x: 0, y: 0, width: 10, height: -1 } }), /area.height/);
+  assert.throws(() => validate('export', { ...base, area: 'full' }), /area must be an object/);
+  assert.throws(() => validate('export', { ...base, dpi: 10 }), /dpi/);
+  assert.throws(() => validate('export', { ...base, selection: 'yes' }), /selection/);
+  assert.throws(() => validate('export', { ...base, selection: true, area: { x: 0, y: 0, width: 1, height: 1 } }), /either area or selection/);
+  assert.throws(() => validate('export', { ...base, path: 'D:\\out\\area.svg', format: 'svg', area: { x: 0, y: 0, width: 1, height: 1 } }), /only available for png/);
+  assert.throws(() => validate('export', { ...base, path: 'D:\\out\\area.pdf', format: 'pdf', selection: true }), /PDF/);
+  assert.equal(validate('export', { ...base, area: { x: 10, y: 20, width: 30, height: 40 }, dpi: 300 }).dpi, 300);
+  assert.equal(validate('export', { ...base, selection: true }).selection, true);
+});
 test('bounded browsing validates pagination and stable group paths', () => {
   for (const args of [{limit: 0}, {limit: 101}, {offset: -1}, {offset: 0.5}, {page: 0}, {include_text: 'true'}, {path: [{index: 1, shape_id: 123}]}, {path: [{index: 0, shape_id: '123'}]}]) {
     assert.throws(() => validate('shapes', {document_id: doc.document_id, ...args}));

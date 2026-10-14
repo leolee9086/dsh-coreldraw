@@ -1,6 +1,6 @@
 {
   "name": "dsh-coreldraw",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "CorelDRAW COM automation tools for DeepSeek Harness, implemented in JavaScript with a serialized C# STA bridge",
   "type": "module",
   "main": "./src/index.js",

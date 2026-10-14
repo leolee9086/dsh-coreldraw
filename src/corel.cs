@@ -136,6 +136,7 @@ public class Startup
         // point just to observe it. Negative coordinates include off-page artwork.
         double factor = (double)((dynamic)application).ConvertUnits(1.0, unit, 3);
         double pageHeight = (double)page.SizeHeight * factor;
+        double pageWidth = (double)page.SizeWidth * factor;
         int count = (int)collection.Count;
         int offset = args.ContainsKey("offset") ? Convert.ToInt32(args["offset"]) : 0;
         int limit = args.ContainsKey("limit") ? Convert.ToInt32(args["limit"]) : 50;
@@ -159,6 +160,7 @@ public class Startup
         }
         if ((int)doc.Unit != unit || (int)collection.Count != count) throw new InvalidOperationException("Document changed while browsing; browse again.");
         return Obj("document_id", id, "page", pageIndex, "path", path, "unit", "mm", "coordinates", "page_top_left",
+            "page_width", pageWidth, "page_height", pageHeight,
             "total", count, "offset", offset, "next_offset", next < count ? (object)next : null,
             "shapes", rows, "elapsed_ms", watch.ElapsedMilliseconds, "consistency", "live_not_atomic");
     }
@@ -299,6 +301,8 @@ public class Startup
         }
         if (action == "save" || action == "export") {
             string path = Text(args, "path");
+            // -1 means the caller did not ask for a selection-limited export.
+            int selectedObjects = -1;
             if (File.Exists(path) && !Flag(args, "overwrite")) throw new IOException("Destination exists; explicitly pass overwrite:true");
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             if (action == "save") {
@@ -307,17 +311,49 @@ public class Startup
             }
             else {
                 string format = Text(args, "format");
-                if (format == "pdf") document.PublishToPDF(path);
+                object areaValue; var area = args.TryGetValue("area", out areaValue) ? (Dictionary<string, object>)areaValue : null;
+                // 96 dpi keeps exported PNGs small and predictable; callers raise it for print.
+                int dpi = args.ContainsKey("dpi") ? Convert.ToInt32(args["dpi"]) : 96;
+                if (area != null) {
+                    // ExportBitmap is the only exported API that takes an explicit
+                    // rectangle. Its units follow the document unit and its origin is
+                    // the page bottom-left corner, so the document is switched to
+                    // millimetres for the call and restored afterwards. Nothing else
+                    // in the document changes.
+                    int oldUnit = (int)document.Unit, oldReference = (int)document.ReferencePoint;
+                    try {
+                        document.Unit = 3; document.ReferencePoint = 3;
+                        dynamic rect = app.CreateRect(Num(area, "x"), Num(area, "y"), Num(area, "width"), Num(area, "height"));
+                        dynamic palette = app.CreateStructPaletteOptions();
+                        // 4 = cdrRGBColorImage, 1 = cdrNormalAntiAliasing, false keeps an opaque white background.
+                        dynamic exporter = document.ExportBitmap(path, 802, 1, 4, 0, 0, dpi, dpi, 1, false, false, false, false, 0, palette, rect);
+                        exporter.Finish();
+                    } finally { document.ReferencePoint = oldReference; document.Unit = oldUnit; }
+                }
+                else if (format == "pdf") document.PublishToPDF(path);
                 else {
                     // ExportEx returns an export filter; Finish commits it synchronously.
                     int filter = format == "svg" ? 1345 : 802;
                     dynamic options = app.CreateStructExportOptions();
                     dynamic palette = app.CreateStructPaletteOptions();
-                    dynamic exporter = document.ExportEx(path, filter, 1, options, palette); exporter.Finish();
+                    // 2 = cdrSelection exports only the bounds of the selected objects;
+                    // 1 = cdrCurrentPage. CorelDRAW itself fails with E_FAIL for an empty
+                    // selection, so this check exists only to say why in plain words.
+                    int range = 1;
+                    if (Flag(args, "selection")) {
+                        selectedObjects = (int)document.SelectionRange.Count;
+                        if (selectedObjects == 0) throw new InvalidOperationException("selection was requested but nothing is selected in CorelDRAW. Select the objects there first, or export an explicit area.");
+                        range = 2;
+                    }
+                    // Without this CorelDRAW exports at its own 300 dpi default.
+                    if (format == "png") { options.ResolutionX = dpi; options.ResolutionY = dpi; }
+                    dynamic exporter = document.ExportEx(path, filter, range, options, palette); exporter.Finish();
                 }
             }
             var file = new FileInfo(path); if (!file.Exists || file.Length == 0) throw new IOException("CorelDRAW did not produce a nonempty output file");
-            return Obj("document_id", documentId, "path", path, "bytes", file.Length);
+            var output = Obj("document_id", documentId, "path", path, "bytes", file.Length);
+            if (selectedObjects >= 0) output["selected_objects"] = selectedObjects;
+            return output;
         }
         throw new InvalidOperationException("Unknown action: " + action);
     }
