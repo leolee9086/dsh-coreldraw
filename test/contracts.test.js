@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { runtimeTarget } from '../src/bridge.js';
 import { validate } from '../src/index.js';
 const doc = { document_id: 'a'.repeat(32), expected_revision: 0, snapshot_token: 'b'.repeat(64) };
+test('bounded browsing validates pagination and stable group paths', () => {
+  for (const args of [{limit: 0}, {limit: 101}, {offset: -1}, {offset: 0.5}, {page: 0}, {include_text: 'true'}, {path: [{index: 1, shape_id: 123}]}, {path: [{index: 0, shape_id: '123'}]}]) {
+    assert.throws(() => validate('shapes', {document_id: doc.document_id, ...args}));
+  }
+  const args = {document_id: doc.document_id, offset: 20, limit: 10, path: [{index: 2, shape_id: '123'}]};
+  assert.deepEqual(validate('shapes', args), args);
+});
 test('Electron selects its own ABI family, never the embedded Node binary', () => {
   assert.equal(runtimeTarget({ electron: '44.0.0', node: '24.0.0', modules: '149' }, 'win32', 'x64').package, 'electron-edge-js');
   assert.equal(runtimeTarget({ node: '24.0.0', modules: '137' }, 'win32', 'x64').package, 'edge-js');

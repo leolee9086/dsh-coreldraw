@@ -33,7 +33,8 @@ Windows 安全上下文会影响运行对象表的可见范围。例如，沙箱
 | `corel_connect` | 按 PID 和实例标识连接；可指定活动对象探针的 ProgID |
 | `corel_documents` | 列出文档，取得绑定实际 COM 文档的 ID |
 | `corel_create` | 新建指定毫米尺寸的空白文档 |
-| `corel_inspect` | 读取当前页、图形、文字及编辑令牌 |
+| `corel_shapes` | 分页读取一层对象的 ID、范围和可选文字；按 children_path 展开组 |
+| `corel_inspect` | 读取当前页、图形、文字及编辑令牌；大图应先用 corel_shapes |
 | `corel_apply` | 批量创建矩形、椭圆、段落文字；移动、缩放、旋转、填色、改字、删除 |
 | `corel_undo` | 撤销指定文档最近一条命令 |
 | `corel_save` | 保存到明确的 `.cdr` 路径 |
@@ -54,6 +55,12 @@ Windows 安全上下文会影响运行对象表的可见范围。例如，沙箱
 ```
 
 默认观察及控制均通过 Harness 审批。配置 `observeApproval` / `controlApproval` 接受 `ask`、`allow`、`deny`；正式 Full access 权限预设可免除 `ask`，显式 `deny` 始终有效。
+
+### 大图的对象定位
+
+`corel_shapes({document_id, limit:50})` 默认只读顶层，不递归扫描整页。跟随 `next_offset` 继续，后续请求传回同一 `page`；组对象的 `children_path` 可原样传作 `path`，只展开该组。每批最多100项，约5秒后在对象之间停止并返回下一偏移。单个COM调用仍不可中止，因此预算不是硬超时。坐标包含页面外对象，统一转换为毫米，不改文档单位或参考点。`include_text:true` 读取文字对象最多4000字符，文字已转曲时仅有曲线对象。
+
+分页结果来自实时文档，不是原子快照；人工增删或重排后应重新浏览。组路径同时核对索引和StaticID，错位时拒绝。分页结果不提供编辑令牌。完整 `corel_inspect` 在对象之间检查10秒预算，超出后明确建议分页，恢复原单位并且不签发令牌；因此大型文档的整页编辑令牌仍可能无法取得，不能用分页结果替代编辑校验。
 
 ## 行为限制
 

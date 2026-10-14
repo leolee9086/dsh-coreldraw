@@ -118,9 +118,55 @@ public class Startup
     string Fingerprint(object snapshot) {
         using (var hash = SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(json.Serialize(snapshot)))).Replace("-", "").ToLowerInvariant();
     }
-    void Shapes(dynamic collection, double height, List<object> result, int depth) {
+    // Browse one level at a time. This intentionally does not produce an editing
+    // token: a partial page must never masquerade as a complete snapshot.
+    Dictionary<string, object> Browse(Document state, string id, Dictionary<string, object> args) {
+        dynamic doc = state.Com;
+        int pageIndex = args.ContainsKey("page") ? Convert.ToInt32(args["page"]) : (int)doc.ActivePage.Index;
+        dynamic page = doc.Pages[pageIndex]; dynamic collection = page.Shapes;
+        var path = args.ContainsKey("path") ? (ArrayList)args["path"] : new ArrayList();
+        foreach (Dictionary<string, object> segment in path) {
+            dynamic parent = collection[Convert.ToInt32(segment["index"])];
+            if (Convert.ToString(parent.StaticID) != Text(segment, "shape_id") || (int)parent.Type != 7)
+                throw new InvalidOperationException("Group path changed. Browse the parent again.");
+            collection = parent.Shapes;
+        }
+        int unit = (int)doc.Unit;
+        // Convert returned coordinates, never change the document's unit/reference
+        // point just to observe it. Negative coordinates include off-page artwork.
+        double factor = (double)((dynamic)application).ConvertUnits(1.0, unit, 3);
+        double pageHeight = (double)page.SizeHeight * factor;
+        int count = (int)collection.Count;
+        int offset = args.ContainsKey("offset") ? Convert.ToInt32(args["offset"]) : 0;
+        int limit = args.ContainsKey("limit") ? Convert.ToInt32(args["limit"]) : 50;
+        var rows = new List<object>(); var watch = System.Diagnostics.Stopwatch.StartNew();
+        int next = offset;
+        while (next < count && rows.Count < limit) {
+            // This budget is checked between objects; one COM call is not cancellable.
+            if (rows.Count > 0 && watch.ElapsedMilliseconds >= 5000) break;
+            int index = next + 1; dynamic shape = collection[index];
+            string shapeId = Convert.ToString(shape.StaticID); int type = (int)shape.Type;
+            var row = Obj("index", index, "shape_id", shapeId, "type", type,
+                "x", (double)shape.LeftX * factor, "y", pageHeight - (double)shape.TopY * factor,
+                "width", (double)shape.SizeWidth * factor, "height", (double)shape.SizeHeight * factor);
+            if (type == 7) { var childPath = new ArrayList(path); childPath.Add(Obj("index", index, "shape_id", shapeId)); row["children_path"] = childPath; }
+            if (Flag(args, "include_text") && type == 6) {
+                string text = (string)shape.Text.Story.Text;
+                row["text"] = text.Length > 4000 ? text.Substring(0, 4000) : text;
+                row["text_truncated"] = text.Length > 4000;
+            }
+            rows.Add(row); next++;
+        }
+        if ((int)doc.Unit != unit || (int)collection.Count != count) throw new InvalidOperationException("Document changed while browsing; browse again.");
+        return Obj("document_id", id, "page", pageIndex, "path", path, "unit", "mm", "coordinates", "page_top_left",
+            "total", count, "offset", offset, "next_offset", next < count ? (object)next : null,
+            "shapes", rows, "elapsed_ms", watch.ElapsedMilliseconds, "consistency", "live_not_atomic");
+    }
+    void Shapes(dynamic collection, double height, List<object> result, int depth, System.Diagnostics.Stopwatch watch) {
         if (depth > 32) throw new InvalidOperationException("Shape nesting exceeds inspection limit");
-        for (int i = 1; i <= (int)collection.Count; i++) {
+        int count = (int)collection.Count;
+        for (int i = 1; i <= count; i++) {
+            if (watch.ElapsedMilliseconds >= 10000) throw new InvalidOperationException("Full inspection exceeded its 10 second budget. Use corel_shapes to browse bounded batches; no editing token was issued.");
             if (result.Count >= 5000) throw new InvalidOperationException("Page exceeds 5000 shape inspection limit");
             dynamic s = collection[i]; double w = (double)s.SizeWidth, h = (double)s.SizeHeight;
             var row = Obj("shape_id", Convert.ToString(s.StaticID), "name", (string)s.Name, "type", (int)s.Type,
@@ -130,7 +176,7 @@ public class Startup
             // Colour models differ between documents; ToString is not a colour value.
             try { row["fill_type"] = (int)s.Fill.Type; row["fill_rgb"] = (int)s.Fill.UniformColor.RGBValue; } catch { }
             result.Add(row);
-            if ((int)s.Type == 7) Shapes(s.Shapes, height, result, depth + 1);
+            if ((int)s.Type == 7) Shapes(s.Shapes, height, result, depth + 1, watch);
         }
     }
     Dictionary<string, object> Snapshot(Document state, string id) {
@@ -138,7 +184,7 @@ public class Startup
         int oldUnit = (int)doc.Unit, oldReference = (int)doc.ReferencePoint;
         try {
             doc.Unit = 3; doc.ReferencePoint = 1;
-            var shapes = new List<object>(); Shapes(page.Shapes, (double)page.SizeHeight, shapes, 0);
+            var shapes = new List<object>(); Shapes(page.Shapes, (double)page.SizeHeight, shapes, 0, System.Diagnostics.Stopwatch.StartNew());
             var content = Obj("page", (int)page.Index, "width", (double)page.SizeWidth, "height", (double)page.SizeHeight, "shapes", shapes);
             var result = Metadata(state.Com, id); result["page"] = content; result["unit"] = "mm";
             result["coordinates"] = "page_top_left"; result["snapshot_token"] = Fingerprint(content);
@@ -222,6 +268,7 @@ public class Startup
             return Snapshot(documents[id], id);
         }
         string documentId = Text(args, "document_id"); Document state = Resolve(documentId); dynamic document = state.Com;
+        if (action == "shapes") return Browse(state, documentId, args);
         if (action == "inspect") return Snapshot(state, documentId);
         if (action == "apply") {
             ValidateSnapshot(state, documentId, args);

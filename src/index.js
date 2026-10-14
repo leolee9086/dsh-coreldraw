@@ -32,7 +32,14 @@ export function validate(action, value) {
     if (args.launch !== undefined && typeof args.launch !== 'boolean') throw new Error('launch must be boolean');
     if (args.launch && args.pid !== undefined) throw new Error('launch cannot be combined with an existing pid');
   }
-  if (['inspect', 'apply', 'undo', 'save', 'export'].includes(action)) {
+  if (action === 'shapes') {
+    for (const [key, min, max] of [['offset', 0, 1000000], ['limit', 1, 100], ['page', 1, 100000]]) {
+      if (args[key] !== undefined && (!Number.isInteger(args[key]) || args[key] < min || args[key] > max)) throw new Error(`${key} must be an integer in ${min}..${max}`);
+    }
+    if (args.include_text !== undefined && typeof args.include_text !== 'boolean') throw new Error('include_text must be boolean');
+    if (args.path !== undefined && (!Array.isArray(args.path) || args.path.length > 32 || args.path.some(s => !s || !Number.isInteger(s.index) || s.index < 1 || s.index > 1000000 || typeof s.shape_id !== 'string' || !/^\d+$/.test(s.shape_id)))) throw new Error('path requires up to 32 index/shape_id segments from children_path');
+  }
+  if (['shapes', 'inspect', 'apply', 'undo', 'save', 'export'].includes(action)) {
     if (typeof args.document_id !== 'string' || !/^[0-9a-f]{32}$/.test(args.document_id)) throw new Error('Invalid document_id');
   }
   if (['apply', 'undo'].includes(action)) {
@@ -75,7 +82,8 @@ export function definitions() {
     ['corel_connect', 'connect', 'Attach to CorelDRAW by pid and instance_id from corel_instances. Multiple instances require explicit selection. launch:true starts only when no instance exists.', object({ pid: { type: 'integer', minimum: 1, maximum: 2147483647 }, instance_id: str('PID and process creation identity from corel_instances'), launch: bool('Explicitly allow starting CorelDRAW when none is running'), prog_id: str('Default CorelDRAW.Application; may specify CorelDRAW.Application.24') })],
     ['corel_documents', 'documents', 'List open CorelDRAW documents and get stable IDs. Does not launch the application.', object({})],
     ['corel_create', 'create', 'Create a new blank CorelDRAW document, sized in mm.', object({ width: num('Page width in mm'), height: num('Page height in mm') }, ['width', 'height'])],
-    ['corel_inspect', 'inspect', 'Inspect the active page of the specified document, including nested groups, geometry and text. Returns revision and snapshot token for editing; max 5000 shapes.', object({ document_id: documentId }, ['document_id'])],
+    ['corel_shapes', 'shapes', 'Read one level of shapes in bounded batches, including off-page objects. Default 50, max 100; stops between objects after about 5 seconds. Follow next_offset and children_path; pin returned page. Coordinates are mm relative to page top left. Live reads, not editing snapshots; does not modify document units.', object({ document_id: documentId, page: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 }, include_text: bool('Read up to 4000 characters per text object; defaults false'), path: { type: 'array', maxItems: 32, items: object({ index: { type: 'integer', minimum: 1 }, shape_id: str('Expected StaticID at this index') }, ['index', 'shape_id']) } }, ['document_id'])],
+    ['corel_inspect', 'inspect', 'Inspect the active page of the specified document, including nested groups, geometry and text. Returns revision and snapshot token for editing; max 5000 shapes and a 10-second budget checked between objects. For large drawings use corel_shapes first.', object({ document_id: documentId }, ['document_id'])],
     ['corel_apply', 'apply', 'Apply 1..100 operations as one CorelDRAW undo group. Positions are page-top-left millimetres. Requires latest inspection token and revision. On error/timeout inspect again; never automatically replay.', object({ ...snapshot, label: str('Undo label (max 120 characters)'), operations: { type: 'array', items: operationSchema, minItems: 1, maxItems: 100 } }, [...Object.keys(snapshot), 'operations'])],
     ['corel_undo', 'undo', 'Undo the latest command in this document (including possible manual edits). Requires current inspection.', object(snapshot, Object.keys(snapshot))],
     ['corel_save', 'save', 'Save the specified document as an absolute .cdr path. Existing destination requires overwrite:true.', object({ document_id: documentId, path: str('Absolute .cdr path'), overwrite: bool('Allow replacing an existing file') }, ['document_id', 'path'])],
@@ -95,7 +103,7 @@ export function apply(ctx, config = {}) {
       output: { schema: { type: 'string' }, render(_args, value) { return [{ type: 'text', text: value }]; } },
       async execute(raw, exec) {
         const args = validate(action, raw);
-        let policy = ['instances', 'documents', 'inspect'].includes(action) || (action === 'connect' && !args.launch) ? observe : control;
+        let policy = ['instances', 'documents', 'shapes', 'inspect'].includes(action) || (action === 'connect' && !args.launch) ? observe : control;
         // Inherit only the authoritative Full access preset; an absent service
         // or a missing agent must never silently grant control.
         if (policy === 'ask' && exec.agent?.session) {
