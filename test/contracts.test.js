@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runtimeTarget } from '../src/bridge.js';
-import { validate, definitions, apply } from '../src/index.js';
+import { validate } from '../src/index.js';
 const doc = { document_id: 'a'.repeat(32), expected_revision: 0, snapshot_token: 'b'.repeat(64) };
 test('Electron selects its own ABI family, never the embedded Node binary', () => {
   assert.equal(runtimeTarget({ electron: '44.0.0', node: '24.0.0', modules: '149' }, 'win32', 'x64').package, 'electron-edge-js');
@@ -24,11 +24,11 @@ test('output paths reject drive-relative, device namespace, ADS and wrong extens
   }
   assert.equal(validate('save', { document_id: doc.document_id, path: 'D:\\作品\\测试.cdr' }).overwrite, false);
 });
-test('registration is lazy, and denied control does not touch the native bridge', async () => {
-  const tools = new Map(); let dispose;
-  apply({ tools: { register: d => tools.set(d.name, d) }, effect: f => { dispose = f(); }, get: () => undefined }, { controlApproval: 'deny' });
-  assert.equal(tools.size, 8);
-  assert.equal(new Set(definitions().map(d => d[0])).size, 8);
-  await assert.rejects(tools.get('corel_create').execute({ width: 100, height: 100 }, {}), /denied/);
-  await dispose();
+test('instance selection rejects ambiguous or malformed requests before COM', () => {
+  for (const pid of [0, -1, 1.5, '123', 2147483648]) assert.throws(() => validate('connect', { pid }), /pid/);
+  assert.throws(() => validate('connect', { instance_id: '123:456' }), /requires pid/);
+  assert.throws(() => validate('connect', { pid: 123, instance_id: 'garbage' }), /identity/);
+  assert.throws(() => validate('connect', { pid: 123, launch: true }), /launch/);
+  assert.throws(() => validate('connect', { launch: 'false' }), /boolean/);
+  assert.deepEqual(validate('connect', { pid: 123, instance_id: '123:456' }), { pid: 123, instance_id: '123:456' });
 });

@@ -56,19 +56,47 @@ public class Startup
         IntPtr x = Marshal.GetIUnknownForObject(a), y = Marshal.GetIUnknownForObject(b);
         try { return x == y; } finally { Marshal.Release(x); Marshal.Release(y); }
     }
+    CorelDiscovery.Instance selected;
+    void Select(CorelDiscovery.Instance instance) {
+        // An explicit switch invalidates every document ID from the old instance.
+        if (selected == null || selected.Pid != instance.Pid || selected.Started != instance.Started) documents.Clear();
+        selected = instance; application = instance.Application;
+    }
     dynamic App(bool launch) {
-        if (application != null) {
-            try { var version = ((dynamic)application).Version; return application; }
-            catch { application = null; documents.Clear(); }
+        if (selected != null) {
+            if (CorelDiscovery.Discovery.Identity(selected.Pid) != selected.Started)
+                throw new InvalidOperationException("Selected CorelDRAW process exited or PID was reused. Discover and explicitly reconnect.");
+            // Busy/disconnected COM errors propagate; never silently select another app.
+            var version = ((dynamic)application).Version; return application;
         }
-        try { application = Marshal.GetActiveObject(progId); }
-        catch (COMException) {
-            if (!launch) throw new InvalidOperationException("No running CorelDRAW COM instance. Open CorelDRAW or explicitly call corel_connect with launch:true.");
-            var type = Type.GetTypeFromProgID(progId, true);
-            application = Activator.CreateInstance(type);
-            ((dynamic)application).Visible = true;
+        return Connect(new Dictionary<string, object> { {"launch", launch} });
+    }
+    object Connect(Dictionary<string, object> args) {
+        string probe = Text(args, "prog_id", progId);
+        var scan = CorelDiscovery.Discovery.Discover(probe, application);
+        CorelDiscovery.Instance target = null;
+        if (args.ContainsKey("pid")) {
+            int pid = Convert.ToInt32(args["pid"]);
+            if (!scan.Instances.TryGetValue(pid, out target)) throw new InvalidOperationException("Requested CorelDRAW PID is not present. " + json.Serialize(scan.Rows()));
+            string identity = Text(args, "instance_id");
+            if (identity != "" && identity != target.Pid + ":" + target.Started) throw new InvalidOperationException("Instance identity changed; discover again before connecting.");
+        } else if (selected != null) {
+            App(false); return application;
+        } else if (scan.Instances.Count == 1) {
+            foreach (var candidate in scan.Instances.Values) target = candidate;
+        } else if (scan.Instances.Count > 1) {
+            throw new InvalidOperationException("Multiple CorelDRAW instances; call corel_connect with pid and instance_id from corel_instances. " + json.Serialize(scan.Rows()));
         }
-        return application;
+        if (target != null) {
+            if (target.Application == null) throw new InvalidOperationException("CorelDRAW PID " + target.Pid + " is running but its COM object is not accessible from this process. " + json.Serialize(scan.Diagnostics));
+            Select(target); return application;
+        }
+        if (!Flag(args, "launch")) throw new InvalidOperationException("No connectable CorelDRAW instance. " + json.Serialize(scan.Diagnostics));
+        if (scan.Incomplete) throw new InvalidOperationException("Discovery was incomplete; refusing to start another CorelDRAW instance. " + json.Serialize(scan.Diagnostics));
+        // Starting is permitted only when discovery found no existing Corel window.
+        object created = Activator.CreateInstance(Type.GetTypeFromProgID(probe, true));
+        ((dynamic)created).Visible = true;
+        Select(CorelDiscovery.Discovery.FromApp(created, "launched")); return application;
     }
     string Register(object doc) {
         foreach (var item in documents) if (Same(item.Value.Com, doc)) return item.Key;
@@ -171,12 +199,16 @@ public class Startup
     Dictionary<string, object> Execute(Dictionary<string, object> args) {
         string action = Text(args, "action");
         if (action == "doctor") return Obj("apartment", Thread.CurrentThread.GetApartmentState().ToString(), "clr", Environment.Version.ToString(), "thread_id", Thread.CurrentThread.ManagedThreadId);
-        if (action == "dispose") { documents.Clear(); application = null; queue.CompleteAdding(); return Obj("disposed", true); }
+        if (action == "dispose") { documents.Clear(); application = null; selected = null; queue.CompleteAdding(); return Obj("disposed", true); }
+        if (action == "instances") {
+            var scan = CorelDiscovery.Discovery.Discover(progId, application);
+            return Obj("instances", scan.Rows(), "diagnostics", scan.Diagnostics, "selected", selected == null ? null : selected.Describe());
+        }
         if (action == "connect") {
             string requested = Text(args, "prog_id", progId);
-            if (requested != progId) { documents.Clear(); application = null; progId = requested; }
-            dynamic connected = App(Flag(args, "launch"));
-            return Obj("version", Convert.ToString(connected.Version), "prog_id", progId, "document_count", (int)connected.Documents.Count);
+            dynamic connected = Connect(args);
+            progId = requested;
+            return Obj("version", Convert.ToString(connected.Version), "prog_id", progId, "document_count", (int)connected.Documents.Count, "instance", selected.Describe());
         }
         dynamic app = App(false);
         if (action == "documents") {

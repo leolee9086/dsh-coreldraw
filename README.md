@@ -10,7 +10,11 @@ DeepSeek Harness 的 CorelDRAW 自动化插件。JavaScript 注册工具并校�
 github:leolee9086/dsh-coreldraw#main
 ```
 
-包内的 `dsh.bundle.patch` 注册工具，不需要修改 agent 预设。安装后按 Harness 提示重新加载宿主。先调用 `corel_connect` 和 `corel_documents` 验证；默认只连接已经运行的 CorelDRAW，`launch:true` 才允许启动软件。
+包内的 `dsh.bundle.patch` 注册工具，不需要修改 agent 预设。安装后按 Harness 提示重新加载宿主。先调用 `corel_instances` 查看实例，使用返回的 `pid` 和 `instance_id` 调用 `corel_connect`，再用 `corel_documents` 验证文档。默认只附着已有实例；只有未发现现存实例时，`launch:true` 才允许启动软件。
+
+发现同时读取 CorelDRAW 窗口和 COM 运行对象表。某些版本不注册 Application 活动对象，但会注册已打开的 CDR 文档；插件通过文档的明确 COM 接口找到所属应用，再核对窗口对应的进程。多个实例时需要显式选择，选择失败不会切换连接，实例切换会使旧文档 ID 失效。`instance_id` 包含进程创建时间，用于识别 PID 重用。
+
+Windows 安全上下文会影响运行对象表的可见范围。例如，沙箱启动的测试实例和普通桌面实例可能互不可见。`connectable:false` 表示窗口存在，但当前进程不能取得其 COM 对象；诊断保留 HRESULT。应在实际 Harness 宿主中验收，而不是把独立沙箱脚本的发现结果当作宿主结果。未保存文档且 Application 未注册的实例也可能只能发现窗口；插件不会为取得连接而另开一份原文档。
 
 ## 系统与依赖
 
@@ -25,7 +29,8 @@ github:leolee9086/dsh-coreldraw#main
 
 | 工具 | 功能 |
 | --- | --- |
-| `corel_connect` | 连接现有实例，或明确允许启动；可指定版本化 ProgID |
+| `corel_instances` | 发现实例，返回 PID、实例标识、窗口标题、可连接状态及诊断 |
+| `corel_connect` | 按 PID 和实例标识连接；可指定活动对象探针的 ProgID |
 | `corel_documents` | 列出文档，取得绑定实际 COM 文档的 ID |
 | `corel_create` | 新建指定毫米尺寸的空白文档 |
 | `corel_inspect` | 读取当前页、图形、文字及编辑令牌 |
@@ -62,10 +67,13 @@ github:leolee9086/dsh-coreldraw#main
 pnpm install --ignore-scripts
 pnpm test
 pnpm doctor
+pnpm smoke:discovery
 pnpm smoke:corel
 ```
 
 `doctor` 不连接 CorelDRAW，验证编译、STA串行、依赖文件及环境变量隔离。`smoke:corel` 明确启动或连接 CorelDRAW，新建独立测试文档，验证中文文字、几何、令牌冲突、撤销及CDR/PNG/SVG/PDF输出；测试文档保留在软件中，文件写入 `artifacts/` 下的新目录。
+
+`smoke:discovery` 对已打开文档做只读检查，验证多实例选择、失效实例标识拒绝、失败选择后原连接仍有效以及发现过程没有启动新实例。可用 `CORELDRAW_TEST_PID` 指定目标，`CORELDRAW_DISCOVERY_REPORT` 保存结果。`pnpm instances` 输出当前执行环境的发现诊断。
 
 使用真实 Electron 而非普通 Node 替代测试：
 

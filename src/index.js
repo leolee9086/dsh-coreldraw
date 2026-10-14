@@ -26,6 +26,12 @@ export function validate(action, value) {
   const finite = (item, key) => { if (!Number.isFinite(item[key]) || Math.abs(item[key]) > 100000) throw new Error(`${key} must be finite and between -100000 and 100000`); };
   const string = (item, key) => { if (typeof item[key] !== 'string' || item[key].length > 100000) throw new Error(`${key} must be a string of at most 100000 characters`); };
   if (action === 'connect' && args.prog_id !== undefined && !/^CorelDRAW\.Application(?:\.\d+)?$/i.test(args.prog_id)) throw new Error('prog_id must be CorelDRAW.Application or a versioned CorelDRAW.Application.N');
+  if (action === 'connect') {
+    if (args.pid !== undefined && (!Number.isInteger(args.pid) || args.pid <= 0 || args.pid > 2147483647)) throw new Error('pid must be a positive 32-bit integer');
+    if (args.instance_id !== undefined && (args.pid === undefined || typeof args.instance_id !== 'string' || !/^\d+:\d+$/.test(args.instance_id))) throw new Error('instance_id requires pid and a discovery identity');
+    if (args.launch !== undefined && typeof args.launch !== 'boolean') throw new Error('launch must be boolean');
+    if (args.launch && args.pid !== undefined) throw new Error('launch cannot be combined with an existing pid');
+  }
   if (['inspect', 'apply', 'undo', 'save', 'export'].includes(action)) {
     if (typeof args.document_id !== 'string' || !/^[0-9a-f]{32}$/.test(args.document_id)) throw new Error('Invalid document_id');
   }
@@ -65,7 +71,8 @@ export function validate(action, value) {
 
 export function definitions() {
   return [
-    ['corel_connect', 'connect', 'Connect to CorelDRAW COM. Default attaches only; launch:true explicitly starts CorelDRAW. Reports actual version.', object({ launch: bool('Explicitly allow starting CorelDRAW'), prog_id: str('Default CorelDRAW.Application; may specify CorelDRAW.Application.24') })],
+    ['corel_instances', 'instances', 'Discover CorelDRAW windows and COM instances without launching. Returns pid, instance_id, title, connectable and HRESULT diagnostics.', object({})],
+    ['corel_connect', 'connect', 'Attach to CorelDRAW by pid and instance_id from corel_instances. Multiple instances require explicit selection. launch:true starts only when no instance exists.', object({ pid: { type: 'integer', minimum: 1, maximum: 2147483647 }, instance_id: str('PID and process creation identity from corel_instances'), launch: bool('Explicitly allow starting CorelDRAW when none is running'), prog_id: str('Default CorelDRAW.Application; may specify CorelDRAW.Application.24') })],
     ['corel_documents', 'documents', 'List open CorelDRAW documents and get stable IDs. Does not launch the application.', object({})],
     ['corel_create', 'create', 'Create a new blank CorelDRAW document, sized in mm.', object({ width: num('Page width in mm'), height: num('Page height in mm') }, ['width', 'height'])],
     ['corel_inspect', 'inspect', 'Inspect the active page of the specified document, including nested groups, geometry and text. Returns revision and snapshot token for editing; max 5000 shapes.', object({ document_id: documentId }, ['document_id'])],
@@ -88,7 +95,7 @@ export function apply(ctx, config = {}) {
       output: { schema: { type: 'string' }, render(_args, value) { return [{ type: 'text', text: value }]; } },
       async execute(raw, exec) {
         const args = validate(action, raw);
-        let policy = ['documents', 'inspect'].includes(action) || (action === 'connect' && !args.launch) ? observe : control;
+        let policy = ['instances', 'documents', 'inspect'].includes(action) || (action === 'connect' && !args.launch) ? observe : control;
         // Inherit only the authoritative Full access preset; an absent service
         // or a missing agent must never silently grant control.
         if (policy === 'ask' && exec.agent?.session) {

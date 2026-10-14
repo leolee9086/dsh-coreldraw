@@ -76,7 +76,7 @@ export class CorelBridge {
     const native = require(artifacts.native);
     const framework = join(process.env.WINDIR ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319');
     this.#raw = native.initializeClrFunc({
-      source: readFileSync(new URL('./corel.cs', import.meta.url), 'utf8'),
+      source: ['corel.cs', 'discovery.cs'].map(file => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n'),
       compiler: artifacts.compiler, typeName: 'Startup', methodName: 'Invoke',
       references: ['System.Web.Extensions.dll', 'Microsoft.CSharp.dll'].map(name => join(framework, name)),
     });
