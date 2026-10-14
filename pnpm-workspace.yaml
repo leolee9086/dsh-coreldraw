@@ -1,0 +1,5 @@
+# All required Windows native artifacts are already in the pinned npm packages.
+# Never require a consumer to run node-gyp, dotnet restore or Electron rebuild.
+allowBuilds:
+  edge-js: false
+  electron-edge-js: false

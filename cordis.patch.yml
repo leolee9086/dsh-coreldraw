@@ -1,0 +1,8 @@
+# Host-owned tool registration. Installing the bundle requires no preset edits.
+- insert:
+    - id: dsh-coreldraw
+      name: dsh-coreldraw
+      config:
+        observeApproval: ask
+        controlApproval: ask
+        timeoutMs: 60000

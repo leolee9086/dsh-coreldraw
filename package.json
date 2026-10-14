@@ -1,0 +1,23 @@
+{
+  "name": "dsh-coreldraw",
+  "version": "0.1.0",
+  "description": "CorelDRAW COM automation tools for DeepSeek Harness, implemented in JavaScript with a serialized C# STA bridge",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": { ".": "./src/index.js", "./bridge": "./src/bridge.js" },
+  "files": ["src", "scripts", "cordis.patch.yml", "README.md", "LICENSE"],
+  "license": "MIT",
+  "engines": { "node": ">=22.19.0" },
+  "packageManager": "pnpm@12.6.0",
+  "repository": { "type": "git", "url": "https://github.com/leolee9086/dsh-coreldraw.git" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "doctor": "node scripts/doctor.mjs",
+    "smoke:corel": "node scripts/smoke-corel.mjs"
+  },
+  "optionalDependencies": {
+    "edge-js": "26.1.0",
+    "electron-edge-js": "44.0.0"
+  }
+}
