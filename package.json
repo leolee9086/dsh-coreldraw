@@ -1,6 +1,6 @@
 {
   "name": "dsh-coreldraw",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "CorelDRAW COM automation tools for DeepSeek Harness, implemented in JavaScript with a serialized C# STA bridge",
   "type": "module",
   "main": "./src/index.js",
@@ -16,7 +16,9 @@
     "doctor": "node scripts/doctor.mjs",
     "instances": "node scripts/diagnose-instances.mjs",
     "smoke:discovery": "node scripts/smoke-discovery.mjs",
-    "smoke:corel": "node scripts/smoke-corel.mjs"
+    "smoke:corel": "node scripts/smoke-corel.mjs",
+    "smoke:assets": "node scripts/smoke-assets.mjs",
+    "prepack": "pnpm test"
   },
   "optionalDependencies": {
     "edge-js": "26.1.0",

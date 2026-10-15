@@ -53,7 +53,7 @@ try {
    assert.ok(result.width>0&&result.height>0,'a selection export must produce a nonempty image');
    // Which objects are selected belongs to the CorelDRAW session and is reset when
    // another COM client disconnects, so this test does not pin an exact pixel size.
-   // scripts/probe-export-range2.mjs proves the range mapping inside one session.
+   // smoke-assets.mjs selects explicit IDs and verifies per-asset exports.
   } else {
    assert.match(result.error,/nothing is selected/,'an empty selection must be refused with a clear message');
   }

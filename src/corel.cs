@@ -13,7 +13,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
-public class Startup
+public partial class Startup
 {
     sealed class Job { public string Json; public TaskCompletionSource<object> Done = new TaskCompletionSource<object>(); }
     sealed class Document { public object Com; public int Revision; }
@@ -270,6 +270,8 @@ public class Startup
             return Snapshot(documents[id], id);
         }
         string documentId = Text(args, "document_id"); Document state = Resolve(documentId); dynamic document = state.Com;
+        if (action == "export_assets") return ExportAssets(state, documentId, args);
+        if (action == "export_catalogue") return ExportCatalogue(state, documentId, args);
         if (action == "shapes") return Browse(state, documentId, args);
         if (action == "inspect") return Snapshot(state, documentId);
         if (action == "apply") {

@@ -1,5 +1,7 @@
 import { win32 as path } from 'node:path';
 import { CorelBridge } from './bridge.js';
+import { assetParameters, validateAssets } from './assets.js';
+import { catalogueParameters, validateCatalogue } from './catalogue.js';
 
 export const name = 'dsh-coreldraw';
 export const inject = ['tools'];
@@ -39,7 +41,7 @@ export function validate(action, value) {
     if (args.include_text !== undefined && typeof args.include_text !== 'boolean') throw new Error('include_text must be boolean');
     if (args.path !== undefined && (!Array.isArray(args.path) || args.path.length > 32 || args.path.some(s => !s || !Number.isInteger(s.index) || s.index < 1 || s.index > 1000000 || typeof s.shape_id !== 'string' || !/^\d+$/.test(s.shape_id)))) throw new Error('path requires up to 32 index/shape_id segments from children_path');
   }
-  if (['shapes', 'inspect', 'apply', 'undo', 'save', 'export'].includes(action)) {
+  if (['shapes', 'inspect', 'apply', 'undo', 'save', 'export', 'export_assets', 'export_catalogue'].includes(action)) {
     if (typeof args.document_id !== 'string' || !/^[0-9a-f]{32}$/.test(args.document_id)) throw new Error('Invalid document_id');
   }
   if (['apply', 'undo'].includes(action)) {
@@ -85,11 +87,15 @@ export function validate(action, value) {
     }
     args.overwrite = args.overwrite === true;
   }
+  if (action === 'export_assets') validateAssets(args);
+  if (action === 'export_catalogue') validateCatalogue(args);
   return args;
 }
 
 export function definitions() {
   return [
+    ['corel_export_catalogue', 'export_catalogue', 'Write a page catalogue of top-level shapes and nested groups, with millimetre geometry, fill and optional text, to JSON; return only a summary. PowerClip contents are not traversed; select their container to export them. Coordinates are page-top-left mm, the same as corel_export_assets.crop. For corel_export.area convert y to page_height_mm - y - height (bottom-left origin). Does not change document units, selection or active page. Live read, not an editing snapshot. Existing destination requires overwrite:true; shape/depth limits fail before replacing any catalogue.', catalogueParameters],
+    ['corel_export_assets', 'export_assets', 'Export 1..100 named assets by nested shape IDs to transparent PNG and/or SVG. Returns source, board-relative, painted and raster bounds in millimetres. PNG crops use page-top-left mm. dry_run validates selections and bounds without writing. Restores selection, page, units and active document. A report_path journals completed files; inspect it before retrying any failure.', assetParameters],
     ['corel_instances', 'instances', 'Discover CorelDRAW windows and COM instances without launching. Returns pid, instance_id, title, connectable and HRESULT diagnostics.', object({})],
     ['corel_connect', 'connect', 'Attach to CorelDRAW by pid and instance_id from corel_instances. Multiple instances require explicit selection. launch:true starts only when no instance exists.', object({ pid: { type: 'integer', minimum: 1, maximum: 2147483647 }, instance_id: str('PID and process creation identity from corel_instances'), launch: bool('Explicitly allow starting CorelDRAW when none is running'), prog_id: str('Default CorelDRAW.Application; may specify CorelDRAW.Application.24') })],
     ['corel_documents', 'documents', 'List open CorelDRAW documents and get stable IDs. Does not launch the application.', object({})],
@@ -108,6 +114,10 @@ export function apply(ctx, config = {}) {
   for (const policy of [observe, control]) if (!['ask', 'allow', 'deny'].includes(policy)) throw new Error('Approval policy must be ask, allow or deny');
   const timeoutMs = config.timeoutMs ?? 60000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300000) throw new Error('timeoutMs must be 1000..300000');
+  // Large catalogues and batches need longer than small browsing requests. A
+  // timeout still does not cancel an in-flight COM operation or replay a batch.
+  const exportTimeoutMs = config.exportTimeoutMs ?? 600000;
+  if (!Number.isInteger(exportTimeoutMs) || exportTimeoutMs < 1000 || exportTimeoutMs > 600000) throw new Error('exportTimeoutMs must be 1000..600000');
   const bridge = new CorelBridge({ cacheDir: config.cacheDir });
   ctx.effect(() => () => bridge.dispose());
   for (const [toolName, action, description, parameters] of definitions()) {
@@ -133,7 +143,8 @@ export function apply(ctx, config = {}) {
           if (answer !== 'allowed-once') throw new Error(`CorelDRAW approval: ${answer}`);
         }
         exec.signal?.throwIfAborted();
-        return JSON.stringify(await bridge.call(action, args, { signal: exec.signal, timeoutMs }));
+        const budget = ['export_assets', 'export_catalogue'].includes(action) ? exportTimeoutMs : timeoutMs;
+        return JSON.stringify(await bridge.call(action, args, { signal: exec.signal, timeoutMs: budget }));
       },
     });
   }

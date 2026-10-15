@@ -39,8 +39,10 @@ Windows 安全上下文会影响运行对象表的可见范围。例如，沙箱
 | `corel_undo` | 撤销指定文档最近一条命令 |
 | `corel_save` | 保存到明确的 `.cdr` 路径 |
 | `corel_export` | 导出 PNG、SVG 或 PDF；可按选中对象或指定矩形范围导出 PNG |
+| `corel_export_catalogue` | 将一页的顶层对象和嵌套组写成 JSON 目录，返回数量、尺寸和文件位置 |
+| `corel_export_assets` | 按对象 ID 批量导出透明 PNG、SVG，以及毫米坐标索引；支持预检和 PNG 裁切 |
 
-操作坐标是页面左上角起算的毫米，文字字号是点。`corel_apply` 和 `corel_undo` 要带最近一次检查返回的 `expected_revision` 和 `snapshot_token`。一个批次最多100项，检查最多5000个图形，支持组内递归。保存及导出使用绝对路径，覆盖已有文件需要 `overwrite:true`。
+浏览、编辑、目录和批量切图坐标都是页面左上角起算的毫米；`corel_export.area` 使用页面左下角，换算见下文。文字字号是点。`corel_apply` 和 `corel_undo` 要带最近一次检查返回的 `expected_revision` 和 `snapshot_token`。一个批次最多100项，检查最多5000个图形，支持组内递归。保存及导出使用绝对路径，覆盖已有文件需要 `overwrite:true`。
 
 ```json
 {
@@ -54,13 +56,21 @@ Windows 安全上下文会影响运行对象表的可见范围。例如，沙箱
 }
 ```
 
-默认观察及控制均通过 Harness 审批。配置 `observeApproval` / `controlApproval` 接受 `ask`、`allow`、`deny`；正式 Full access 权限预设可免除 `ask`，显式 `deny` 始终有效。
+默认观察及控制均通过 Harness 审批。配置 `observeApproval` / `controlApproval` 接受 `ask`、`allow`、`deny`；正式 Full access 权限预设可免除 `ask`，显式 `deny` 始终有效。普通调用的 `timeoutMs` 默认60000，范围1000..300000；目录和批量切图使用独立的 `exportTimeoutMs`，默认600000，范围1000..600000。等待超时不等于Corel已经停止执行。
 
 ### 大图的对象定位
 
 `corel_shapes({document_id, limit:50})` 默认只读顶层，不递归扫描整页。跟随 `next_offset` 继续，后续请求传回同一 `page`；组对象的 `children_path` 可原样传作 `path`，只展开该组。每批最多100项，约5秒后在对象之间停止并返回下一偏移。单个COM调用仍不可中止，因此预算不是硬超时。坐标包含页面外对象，统一转换为毫米，不改文档单位或参考点。`include_text:true` 读取文字对象最多4000字符，文字已转曲时仅有曲线对象。
 
 分页结果来自实时文档，不是原子快照；人工增删或重排后应重新浏览。组路径同时核对索引和StaticID，错位时拒绝。分页结果不提供编辑令牌。完整 `corel_inspect` 在对象之间检查10秒预算，超出后明确建议分页，恢复原单位并且不签发令牌；因此大型文档的整页编辑令牌仍可能无法取得，不能用分页结果替代编辑校验。
+
+### 完整对象目录
+
+`corel_export_catalogue({document_id, path: "C:\\project\\catalogue.json"})` 把指定页（默认活动页）的目录写到文件，避免上千对象挤进工具回复。行字段包括 `index/id/type/name/x/y/w/h/fill_type`，纯色填充才有 `fill_hex`，组的子对象位于 `children`。读取填充失败会记录 `fill_error`；`include_text:true` 可读取未转曲文字，最多4000字符。
+
+默认最多100000个对象，可用 `max_shapes` 调整到1000000；嵌套超过32层或总数超限会明确失败，保留已有目录。目录先写入同目录临时文件，再整体替换；已有目标需要 `overwrite:true`。读取过程按比例转换毫米，不修改文档单位、选区或活动页。
+
+该目录是实时读取，不是编辑快照。它遍历普通组，**不展开 PowerClip 内部对象**；导出 PowerClip 里的图片时可选它的容器。转曲文字只能读到曲线，插件不会自动恢复文本或判断标题、图片、底图的语义，需结合预览确定对象集合。
 
 ### 导出范围
 
@@ -71,6 +81,25 @@ Windows 安全上下文会影响运行对象表的可见范围。例如，沙箱
 - `area: {x, y, width, height}`（仅 PNG）导出任意矩形，单位毫米，原点在**页面左下角**，因此可以直接用 `corel_shapes` 读到的毫米坐标（把它的页面左上角 y 换算成 `页面高度 - y - 高`）。实测 `0,0,100,80` 在 100x80mm 页面上得到 377x302 像素。
 
 `dpi` 默认 96，可选 24..1200；面积导出靠它放大像素，选区导出也靠它，否则 CorelDRAW 会按自己的 300dpi 默认值输出大图。导出会临时将文档单位和参考点切到毫米，结束后恢复，不写入任何文档内容。选区范围由 CorelDRAW 的实时选择决定，与 `corel_shapes` 的分页快照可能瞬时不一致。
+
+### 按对象批量切图
+
+`corel_export_assets` 接收 `document_id`、`output_dir` 和1至100个 `assets`。每个素材提供有意义的相对 `name`、递归图元 `shape_ids`、`formats: ["png", "svg"]`，PNG可指定 `dpi`。先用 `dry_run:true` 校验整批对象、目标冲突与实际边界，再正式导出。选区不接受父组与其子对象同时入选。
+
+PNG默认透明，完整包含描边；`crop` 使用页面左上角毫米，且只用于PNG。SVG保留完整选区及Corel原填充，位图资源可能由Corel放在相邻资源目录中。`origin` 只用于返回相对坐标，不移动原稿。结果分别记录原对象几何、含描边范围、实际PNG裁切范围，避免把SVG与PNG的不同画布混用。
+
+`report_path` 指定JSON进度文件，首次输出前写入未完成状态，每个文件导出后整体更新；失败时先核对记录与已有文件，再提交剩余项。默认拒绝覆盖，只有 `overwrite:true` 才允许替换。JSON目录与进度文件使用同目录临时文件发布；PNG/SVG仍由Corel直接写入，失败或中断可能留下部分产物。工具逐项尝试恢复原选区、页、单位和活动文档，恢复失败会明确报错；不保存或复制原稿。一次COM调用不可中止，超时后不要盲目重跑。
+
+PNG的 `dpi` 范围为12..1200，默认96。`dry_run` 验证对象、边界和参数，不检查语义是否完整；正式返回的 `complete:true` 表示批次导出完成，仍需看图检查遗漏、透明区域、SVG里的位图引用与字腔。SVG保持Corel的填充关系，不做自动封孔或重画。
+
+独立CLI复用同一个桥动作与参数校验：
+
+```powershell
+node scripts/export-assets.mjs C:\\project\\assets.json --dry-run
+node scripts/export-assets.mjs C:\\project\\assets.json
+```
+
+CLI配置用 `document_path` 指定已经打开的原稿，替代会话内的 `document_id`；可提供 `connection: {pid, instance_id}` 选择实例，其余字段与工具相同。项目配置、进度和产物应存放在该项目目录，插件仓库只存放通用实现及通用验证。
 
 ## 行为限制
 
@@ -89,6 +118,8 @@ pnpm smoke:corel
 ```
 
 `doctor` 不连接 CorelDRAW，验证编译、STA串行、依赖文件及环境变量隔离。`smoke:corel` 明确启动或连接 CorelDRAW，新建独立测试文档，验证中文文字、几何、令牌冲突、撤销及CDR/PNG/SVG/PDF输出；测试文档保留在软件中，文件写入 `artifacts/` 下的新目录。
+
+`pnpm smoke:assets C:\project\smoke-config.json` 使用与切图CLI相同的配置，要求新的 `output_dir` 和明确的已打开原稿路径。它验证目录覆盖拒绝、超限时保留旧目录、目录整体替换、预检不写文件、真实PNG/SVG导出、PNG含透明通道、重复输出拒绝，以及导出前后图元目录一致；不保存、关闭或复制原稿。配置中的对象ID和输出位置属于项目，测试脚本没有预置项目数据。
 
 `smoke:discovery` 对已打开文档做只读检查，验证多实例选择、失效实例标识拒绝、失败选择后原连接仍有效以及发现过程没有启动新实例。可用 `CORELDRAW_TEST_PID` 指定目标，`CORELDRAW_DISCOVERY_REPORT` 保存结果。`pnpm instances` 输出当前执行环境的发现诊断。
 

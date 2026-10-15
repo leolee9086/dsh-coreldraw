@@ -76,7 +76,7 @@ export class CorelBridge {
     const native = require(artifacts.native);
     const framework = join(process.env.WINDIR ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319');
     this.#raw = native.initializeClrFunc({
-      source: ['corel.cs', 'discovery.cs'].map(file => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n'),
+      source: ['corel.cs', 'discovery.cs', 'output.cs', 'assets.cs', 'catalogue.cs'].map(file => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n'),
       compiler: artifacts.compiler, typeName: 'Startup', methodName: 'Invoke',
       references: ['System.Web.Extensions.dll', 'Microsoft.CSharp.dll'].map(name => join(framework, name)),
     });
@@ -94,7 +94,7 @@ export class CorelBridge {
       this.#active = true;
       started = true;
       try {
-        return await new Promise((resolve, reject) => this.#raw(JSON.stringify({ action, ...args }), (error, json) => {
+        return await new Promise((resolve, reject) => this.#raw(JSON.stringify({ ...args, action }), (error, json) => {
           if (error) return reject(error);
           try {
             const value = JSON.parse(json);

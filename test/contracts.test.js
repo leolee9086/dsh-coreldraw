@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import { runtimeTarget } from '../src/bridge.js';
 import { validate } from '../src/index.js';
 const doc = { document_id: 'a'.repeat(32), expected_revision: 0, snapshot_token: 'b'.repeat(64) };
+test('asset export rejects escaping paths, name collisions and ambiguous crops before COM', () => {
+  const asset = { name: '标题/中文主标题', shape_ids: ['958'], formats: ['png', 'svg'] };
+  const base = { document_id: doc.document_id, output_dir: 'W:\\工程\\切图', assets: [asset] };
+  for (const name of ['../outside', 'D:\\outside', 'bad:stream', 'CON', 'name.']) {
+    assert.throws(() => validate('export_assets', { ...base, assets: [{ ...asset, name }] }));
+  }
+  assert.throws(() => validate('export_assets', { ...base, assets: [asset, { ...asset, name: '标题\\中文主标题' }] }), /Duplicate/);
+  assert.throws(() => validate('export_assets', { ...base, assets: [{ ...asset, shape_ids: ['958', '958'] }] }), /distinct/);
+  assert.throws(() => validate('export_assets', { ...base, assets: [{ ...asset, crop: { x: 0, y: 0, width: 1, height: 1 } }] }), /PNG-only/);
+  const result = validate('export_assets', { ...base, dry_run: true, origin: { x: -100, y: 200 } });
+  assert.equal(result.assets[0].name, '标题\\中文主标题');
+  assert.equal(asset.name, '标题/中文主标题');
+});
 test('export range options are validated before COM', () => {
   const base = { document_id: doc.document_id, path: 'D:\\out\\area.png', format: 'png' };
   assert.throws(() => validate('export', { ...base, area: { x: 0, y: 0, width: 0, height: 10 } }), /area.width/);
@@ -51,4 +64,18 @@ test('instance selection rejects ambiguous or malformed requests before COM', ()
   assert.throws(() => validate('connect', { pid: 123, launch: true }), /launch/);
   assert.throws(() => validate('connect', { launch: 'false' }), /boolean/);
   assert.deepEqual(validate('connect', { pid: 123, instance_id: '123:456' }), { pid: 123, instance_id: '123:456' });
+});
+test('catalogue export validates its destination before COM', () => {
+  const base = { document_id: doc.document_id, path: 'W:\\工程\\切图\\source-index.json' };
+  for (const path of ['source-index.json', 'C:index.json', String.raw`\\?\C:\index.json`, String.raw`\\.\C:\index.json`, 'W:\\工程\\切图\\index.svg', 'W:\\工程\\index.json:hidden']) {
+    assert.throws(() => validate('export_catalogue', { ...base, path }));
+  }
+  assert.throws(() => validate('export_catalogue', { ...base, page: 0 }), /page/);
+  assert.throws(() => validate('export_catalogue', { ...base, include_text: 'true' }), /boolean/);
+  assert.throws(() => validate('export_catalogue', { ...base, max_shapes: 0 }), /max_shapes/);
+  assert.throws(() => validate('export_catalogue', { ...base, max_shapes: 1000001 }), /max_shapes/);
+  const result = validate('export_catalogue', { ...base, include_text: true, max_shapes: 5000 });
+  assert.equal(result.path, 'W:\\工程\\切图\\source-index.json');
+  assert.equal(result.include_text, true);
+  assert.equal(result.overwrite, undefined);
 });
